@@ -16,38 +16,6 @@ resource "azurerm_service_plan" "web_plan" {
   tags = local.tags
 }
 
-# # # Function App Service Plan (Consumption Plan) // old and not working with Playwright
-# # resource "azurerm_service_plan" "func_plan" {
-# #   name                = local.func_plane_name
-# #   location            = azurerm_resource_group.rg.location
-# #   resource_group_name = azurerm_resource_group.rg.name
-# #   os_type             = var.os_type
-# #   sku_name            = "Y1" # Consumption plan
-# # }
-# # Function App Service Plan - Elastic Premium Tier 1
-# resource "azurerm_service_plan" "func_plan" {
-#   name                = local.func_plane_name
-#   location            = azurerm_resource_group.rg.location
-#   resource_group_name = azurerm_resource_group.rg.name
-#   os_type             = var.os_type
-#   sku_name            = "EP1" 
-
-#   # Optional: Auto-scale settings
-#   maximum_elastic_worker_count = 1 # Max instances.  1 instance = ~150 EUR/месец
-
-#   tags = local.tags
-# }
-# Function App Service Plan -> with this plan Playwright can't install Chromium, because B2 plan hasn't access to system packages (apt-get, etc.)
-resource "azurerm_service_plan" "func_plan" {
-  name                = local.func_plane_name
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-  os_type             = var.os_type
-  sku_name            = "B2" # Standard tier - 3.5 GB RAM (вместо EP1)
-
-  tags = local.tags
-}
-
 # Web App
 resource "azurerm_linux_web_app" "web_app" {
   name                = local.app_name
@@ -75,83 +43,11 @@ resource "azurerm_linux_web_app" "web_app" {
   tags = local.tags
 }
 
-# Storage Account for Function App
-resource "azurerm_storage_account" "func_storage" {
-  name                     = local.func_storage_name
-  resource_group_name      = azurerm_resource_group.rg.name
-  location                 = azurerm_resource_group.rg.location
-  account_tier             = "Standard"
-  account_replication_type = "LRS"
-
-  tags = local.tags
-}
-
-# Function App
-resource "azurerm_linux_function_app" "func_app" {
-  name                       = local.func_app_name
-  location                   = azurerm_resource_group.rg.location
-  resource_group_name        = azurerm_resource_group.rg.name
-  service_plan_id            = azurerm_service_plan.func_plan.id
-  storage_account_name       = azurerm_storage_account.func_storage.name # a required min storage for the Function App
-  storage_account_access_key = azurerm_storage_account.func_storage.primary_access_key
-
-  identity {
-    type = "SystemAssigned"
-  }
-
-  site_config {
-    always_on = true # Important for EP1!
-
-    application_stack {
-      dotnet_version = "8.0"
-    }
-
-    # Enable custom startup command for Playwright
-    app_command_line = ""
-  }
-
-  connection_string {
-    name  = "EventsConnection"
-    type  = "SQLServer"
-    value = "Server=tcp:${azurerm_mssql_server.sql.fully_qualified_domain_name},1433;Initial Catalog=${azurerm_mssql_database.db.name};User ID=${var.sql_admin_login};Password=${var.sql_admin_password};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
-  }
-
-  app_settings = {
-    "FUNCTIONS_WORKER_RUNTIME"                 = "dotnet-isolated"
-    "FUNCTIONS_EXTENSION_VERSION"              = "~4"
-    "AzureWebJobsStorage"                      = azurerm_storage_account.func_storage.primary_connection_string
-    "WEBSITE_CONTENTAZUREFILECONNECTIONSTRING" = azurerm_storage_account.func_storage.primary_connection_string
-    "WEBSITE_CONTENTSHARE"                     = local.func_app_name
-    "FUNCTIONS_WORKER_PROCESS_COUNT"           = "1"
-    "AzureFunctionsJobHost__functionTimeout"   = "00:10:00"
-    "Groq__ApiKey"                             = var.groq_api_key
-    "SCM_DO_BUILD_DURING_DEPLOYMENT"           = "false"
-    "ENABLE_ORYX_BUILD"                        = "false"
-    "WEBSITE_USE_PLACEHOLDER_DOTNETISOLATED"   = "1"
-    "APPLICATIONINSIGHTS_CONNECTION_STRING"    = azurerm_application_insights.func_insights.connection_string
-    # Playwright settings
-    "PLAYWRIGHT_BROWSERS_PATH"                 = "/home/site/wwwroot/.playwright"
-    "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD"         = "0"
-  }
-
-  tags = local.tags
-}
-
-# Application Insights for Function App
-resource "azurerm_application_insights" "func_insights" {
-  name                = "${local.func_app_name}-insights"
-  location            = azurerm_resource_group.rg.location
-  resource_group_name = azurerm_resource_group.rg.name
-  application_type    = "web"
-
-  tags = local.tags
-}
-
 # SQL Server with AAD Admin
 resource "azurerm_mssql_server" "sql" {
   name                          = local.sql_name
   resource_group_name           = azurerm_resource_group.rg.name
-  location                      = local.db_location // azurerm_resource_group.rg.location
+  location                      = azurerm_resource_group.rg.location
   version                       = "12.0"
   administrator_login           = var.sql_admin_login
   administrator_login_password  = var.sql_admin_password
@@ -204,3 +100,111 @@ resource "azuread_group_member" "pipeline_service_principal" {
   member_object_id = var.ci_cd_sp_id
 }
 
+# ========================================
+# # # # Function App Service Plan (Consumption Plan) // old and not working with Playwright
+# # # resource "azurerm_service_plan" "func_plan" {
+# # #   name                = local.func_plane_name
+# # #   location            = azurerm_resource_group.rg.location
+# # #   resource_group_name = azurerm_resource_group.rg.name
+# # #   os_type             = var.os_type
+# # #   sku_name            = "Y1" # Consumption plan
+# # # }
+# # Function App Service Plan - Elastic Premium Tier 1
+# resource "azurerm_service_plan" "func_plan" {
+#   name                = local.func_plane_name
+#   location            = azurerm_resource_group.rg.location
+#   resource_group_name = azurerm_resource_group.rg.name
+#   os_type             = var.os_type
+#   sku_name            = "EP1"
+
+#   # Optional: Auto-scale settings
+#   maximum_elastic_worker_count = 1 # Max instances.  1 instance = ~150 EUR/месец
+
+#   tags = local.tags
+# }
+# # # Function App Service Plan -> with this plan Playwright can't install Chromium, because B2 plan hasn't access to system packages (apt-get, etc.)
+# # resource "azurerm_service_plan" "func_plan" {
+# #   name                = local.func_plane_name
+# #   location            = azurerm_resource_group.rg.location
+# #   resource_group_name = azurerm_resource_group.rg.name
+# #   os_type             = var.os_type
+# #   sku_name            = "B2" # Standard tier - 3.5 GB RAM (вместо EP1)
+
+# #   tags = local.tags
+# # }
+
+# # Storage Account for Function App
+# resource "azurerm_storage_account" "func_storage" {
+#   name                     = local.func_storage_name
+#   resource_group_name      = azurerm_resource_group.rg.name
+#   location                 = azurerm_resource_group.rg.location
+#   account_tier             = "Standard"
+#   account_replication_type = "LRS"
+
+#   tags = local.tags
+# }
+
+# # Function App
+# resource "azurerm_linux_function_app" "func_app" {
+#   name                       = local.func_app_name
+#   location                   = azurerm_resource_group.rg.location
+#   resource_group_name        = azurerm_resource_group.rg.name
+#   service_plan_id            = azurerm_service_plan.func_plan.id
+#   storage_account_name       = azurerm_storage_account.func_storage.name # a required min storage for the Function App
+#   storage_account_access_key = azurerm_storage_account.func_storage.primary_access_key
+
+#   identity {
+#     type = "SystemAssigned"
+#   }
+
+#   site_config {
+#     always_on = true # Important for EP1!
+#     application_stack {
+#       dotnet_version              = "8.0"
+#       use_dotnet_isolated_runtime = true
+#     }
+#     # Enable custom startup command for Playwright
+#     app_command_line = ""
+#   }
+#   # site_config {
+#   #   always_on        = true
+#   #   linux_fx_version = "DOCKER|<your-container-registry>/<image>:<tag>" // TODO:
+#   #   # or public Docker Hub: "DOCKER|username/image:tag"
+#   # }
+
+#   connection_string {
+#     name  = "EventsConnection"
+#     type  = "SQLServer"
+#     value = "Server=tcp:${azurerm_mssql_server.sql.fully_qualified_domain_name},1433;Initial Catalog=${azurerm_mssql_database.db.name};User ID=${var.sql_admin_login};Password=${var.sql_admin_password};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;"
+#   }
+
+#   app_settings = {
+#     "FUNCTIONS_WORKER_RUNTIME"                 = "dotnet-isolated"
+#     "FUNCTIONS_EXTENSION_VERSION"              = "~4"
+#     "AzureWebJobsStorage"                      = azurerm_storage_account.func_storage.primary_connection_string
+#     "WEBSITE_CONTENTAZUREFILECONNECTIONSTRING" = azurerm_storage_account.func_storage.primary_connection_string
+#     "WEBSITE_CONTENTSHARE"                     = local.func_app_name
+#     "FUNCTIONS_WORKER_PROCESS_COUNT"           = "1"
+#     "AzureFunctionsJobHost__functionTimeout"   = "00:10:00"
+#     "Groq__ApiKey"                             = var.groq_api_key
+#     "SCM_DO_BUILD_DURING_DEPLOYMENT"           = "false"
+#     "ENABLE_ORYX_BUILD"                        = "false"
+#     "WEBSITE_USE_PLACEHOLDER_DOTNETISOLATED"   = "1"
+#     "APPLICATIONINSIGHTS_CONNECTION_STRING"    = azurerm_application_insights.func_insights.connection_string
+#     # Playwright settings
+#     "PLAYWRIGHT_BROWSERS_PATH"         = "/home/site/wwwroot/playwright_browsers"
+#     "PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD" = "0"
+#   }
+
+#   tags = local.tags
+# }
+
+# # Application Insights for Function App
+# resource "azurerm_application_insights" "func_insights" {
+#   name                = "${local.func_app_name}-insights"
+#   location            = azurerm_resource_group.rg.location
+#   resource_group_name = azurerm_resource_group.rg.name
+#   application_type    = "web"
+
+#   tags = local.tags
+# }
