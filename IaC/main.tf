@@ -40,6 +40,10 @@ resource "azurerm_linux_web_app" "web_app" {
     value = "Server=tcp:${azurerm_mssql_server.sql.fully_qualified_domain_name},1433;Initial Catalog=${azurerm_mssql_database.db.name};Encrypt=True;TrustServerCertificate=False;Connection Timeout=30;Authentication=Active Directory Default;"
   }
 
+  app_settings = {
+    "BlobStorage__Uri" = azurerm_storage_account.events_storage.primary_blob_endpoint
+  }
+
   tags = local.tags
 }
 
@@ -59,6 +63,13 @@ resource "azurerm_mssql_server" "sql" {
   }
 
   tags = local.tags
+}
+
+# Assign CI/CD Service Principal the "SQL Server Contributor" role
+resource "azurerm_role_assignment" "ci_cd_sql_contributor" {
+  scope                = azurerm_mssql_server.sql.id
+  role_definition_name = "SQL Server Contributor"
+  principal_id         = var.ci_cd_sp_id
 }
 
 resource "azurerm_mssql_firewall_rule" "allow_my_ip" {
@@ -107,12 +118,14 @@ resource "azurerm_storage_account" "events_storage" {
   location                 = azurerm_resource_group.rg.location
   account_tier             = "Standard"
   account_replication_type = "LRS"
+
+  tags = local.tags
 }
 
 resource "azurerm_storage_container" "event_images" {
   name                  = "event-images" // single container for original images and thumbnails in different virtual folders
   storage_account_id    = azurerm_storage_account.events_storage.id
-  container_access_type = "private"  # read and write access via Azure SDK/API withkey or SAS token
+  container_access_type = "private" # read and write access via Azure SDK/API withkey or SAS token
 }
 
 # Assign Web App Managed Identity the "Storage Blob Data Contributor" role
@@ -120,6 +133,13 @@ resource "azurerm_role_assignment" "webapp_storage_blob_contributor" {
   scope                = azurerm_storage_account.events_storage.id
   role_definition_name = "Storage Blob Data Contributor"
   principal_id         = azurerm_linux_web_app.web_app.identity[0].principal_id
+}
+
+# Assign Developer User the "Storage Blob Data Contributor" role for development
+resource "azurerm_role_assignment" "developer_storage_blob_contributor" {
+  scope                = azurerm_storage_account.events_storage.id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = var.developer_object_id
 }
 
 # ========================================
