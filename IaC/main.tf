@@ -100,6 +100,28 @@ resource "azuread_group_member" "pipeline_service_principal" {
   member_object_id = var.ci_cd_sp_id
 }
 
+# Storage Account for Event Images and Thumbnails
+resource "azurerm_storage_account" "events_storage" {
+  name                     = local.storage_name
+  resource_group_name      = azurerm_resource_group.rg.name
+  location                 = azurerm_resource_group.rg.location
+  account_tier             = "Standard"
+  account_replication_type = "LRS"
+}
+
+resource "azurerm_storage_container" "event_images" {
+  name                  = "event-images" // single container for original images and thumbnails in different virtual folders
+  storage_account_id    = azurerm_storage_account.events_storage.id
+  container_access_type = "private"  # read and write access via Azure SDK/API withkey or SAS token
+}
+
+# Assign Web App Managed Identity the "Storage Blob Data Contributor" role
+resource "azurerm_role_assignment" "webapp_storage_blob_contributor" {
+  scope                = azurerm_storage_account.events_storage.id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = azurerm_linux_web_app.web_app.identity[0].principal_id
+}
+
 # ========================================
 # # # # Function App Service Plan (Consumption Plan) // old and not working with Playwright
 # # # resource "azurerm_service_plan" "func_plan" {
