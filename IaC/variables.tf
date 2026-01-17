@@ -40,3 +40,40 @@ variable "ci_cd_sp_id" {
   description = "Service Principal ID for CI/CD pipeline to be added as SQL Admin in the group."
   
 }
+
+variable "smtp_host" {
+  type        = string
+  description = "SMTP server host."
+}
+variable "smtp_port" {
+  type        = number
+  description = "SMTP server port."
+}
+variable "smtp_username" {
+  type        = string
+  description = "SMTP server username."
+}
+variable "smtp_password" {
+  type        = string
+  description = "SMTP server password."
+}
+variable "smtp_from_address" {
+  type        = string
+  description = "SMTP server from address."
+}
+variable "smtp_use_ssl" {
+  type        = bool
+  description = "Use SSL for SMTP."
+}
+variable "smtp_use_tls" {
+  type        = bool
+  description = "Use TLS for SMTP."
+}
+variable "use_default_credentials" {
+  type        = bool
+  description = "Use default credentials for SMTP."
+}
+variable "display_name" {
+  type        = string
+  description = "Display name for SMTP."
+}

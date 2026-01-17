@@ -42,6 +42,15 @@ resource "azurerm_linux_web_app" "web_app" {
 
   app_settings = {
     "BlobStorage__Uri" = azurerm_storage_account.events_storage.primary_blob_endpoint
+    "Smtp__Host"    = var.smtp_host
+    "Smtp__Port"    = var.smtp_port # tostring(var.smtp_port)
+    "Smtp__Username" = var.smtp_username
+    "Smtp__Password" = var.smtp_password
+    "Smtp__FromAddress" = var.smtp_from_address
+    "Smtp__UseSsl"  = var.smtp_use_ssl
+    "Smtp__UseTls"  = var.smtp_use_tls
+    "UseDefaultCredentials" = var.use_default_credentials
+    "DisplayName"   = var.display_name
   }
 
   tags = local.tags
@@ -125,7 +134,8 @@ resource "azurerm_storage_account" "events_storage" {
 resource "azurerm_storage_container" "event_images" {
   name                  = "event-images" // single container for original images and thumbnails in different virtual folders
   storage_account_id    = azurerm_storage_account.events_storage.id
-  container_access_type = "private" # read and write access via Azure SDK/API withkey or SAS token
+  # container_access_type = "private" # read and write access via Azure SDK/API withkey or SAS token
+  container_access_type = "blob" # allow public read access for blobs (images)
 }
 
 # Assign Web App Managed Identity the "Storage Blob Data Contributor" role
