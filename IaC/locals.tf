@@ -1,5 +1,6 @@
 locals {
   env               = "prod"
+  environment       = "Production"
   location          = "westeurope"
   region_code       = "we"
   rg_name           = "gosofia-${local.env}-${local.region_code}-rg"

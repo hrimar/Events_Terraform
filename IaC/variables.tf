@@ -1,3 +1,26 @@
+variable "dotnet_version" {
+  description = "The .NET version for the app service."
+  type        = string
+  default     = "8.0"
+}
+
+variable "http2_enabled" {
+  description = "Enable HTTP/2 for the app service."
+  type        = bool
+  default     = true
+}
+
+variable "min_tls_version" {
+  description = "The minimum TLS version to support."
+  type        = string
+  default     = "1.2"
+}
+
+variable "ftps_state" {
+  description = "The FTPS state for the app service."
+  type        = string
+  default     = "Disabled"
+}
 variable "subscription_id" {
   type        = string
   description = "Azure Subscription ID."
