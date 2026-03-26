@@ -100,3 +100,21 @@ variable "display_name" {
   type        = string
   description = "Display name for SMTP."
 }
+
+variable "crawler_sql_connection_string" {
+  type        = string
+  description = "SQL Server connection string for the crawler job."
+  sensitive   = true
+}
+
+variable "claude_api_key" {
+  type        = string
+  description = "Claude API key for the crawler job."
+  sensitive   = true
+}
+
+variable "crawler_image_tag" {
+  type        = string
+  description = "Docker image tag for the crawler job. Updated on each deployment."
+  default     = "latest"
+}

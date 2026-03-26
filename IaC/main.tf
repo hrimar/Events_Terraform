@@ -136,10 +136,10 @@ resource "azurerm_storage_account" "events_storage" {
 }
 
 resource "azurerm_storage_container" "event_images" {
-  name               = "event-images" // single container for original images and thumbnails in different virtual folders
-  storage_account_id = azurerm_storage_account.events_storage.id
+  name                    = "event-images" // single container for original images and thumbnails in different virtual folders
+  storage_account_id      = azurerm_storage_account.events_storage.id
   # container_access_type = "private" # read and write access via Azure SDK/API withkey or SAS token
-  container_access_type = "blob" # allow public read access for blobs (images)
+  container_access_type   = "blob" # public read for images
 }
 
 # Assign Web App Managed Identity the "Storage Blob Data Contributor" role
@@ -224,7 +224,7 @@ resource "azurerm_role_assignment" "developer_storage_blob_contributor" {
 #   }
 #   # site_config {
 #   #   always_on        = true
-#   #   linux_fx_version = "DOCKER|<your-container-registry>/<image>:<tag>" // TODO:
+#   #   linux_fx_version = "DOCKER|<your-container-registry>/<image>:<tag>" //
 #   #   # or public Docker Hub: "DOCKER|username/image:tag"
 #   # }
 
@@ -264,3 +264,118 @@ resource "azurerm_role_assignment" "developer_storage_blob_contributor" {
 
 #   tags = local.tags
 # }
+
+# =============================================================================
+# Crawler Container Resources
+# Replace the old Function App (EP1 Premium Plan, ~$150/month).
+# Container Apps Job runs only ~3 min/day → < $1/month.
+# Deployed via GitHub Actions (see .github/workflows/crawler-deploy-production.yml).
+# =============================================================================
+
+# Azure Container Registry — stores the crawler Docker image
+resource "azurerm_container_registry" "acr" {
+  name                = local.acr_name
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  sku                 = "Basic"
+  admin_enabled       = true
+
+  tags = local.tags
+}
+
+# Assign CI/CD Service Principal the "AcrPush" role — needed by GitHub Actions pipeline
+# to push the crawler Docker image to the registry on each deployment.
+resource "azurerm_role_assignment" "ci_cd_acr_push" {
+  scope                = azurerm_container_registry.acr.id
+  role_definition_name = "AcrPush"
+  principal_id         = var.ci_cd_sp_id
+}
+
+# Log Analytics Workspace — receives logs from the Container Apps Environment
+resource "azurerm_log_analytics_workspace" "crawler_logs" {
+  name                = local.crawler_log_name
+  resource_group_name = azurerm_resource_group.rg.name
+  location            = azurerm_resource_group.rg.location
+  sku                 = "PerGB2018"
+  retention_in_days   = 30
+
+  tags = local.tags
+}
+
+# Container Apps Environment — shared networking and logging layer for container jobs/apps
+resource "azurerm_container_app_environment" "cae" {
+  name                       = local.cae_name
+  resource_group_name        = azurerm_resource_group.rg.name
+  location                   = azurerm_resource_group.rg.location
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.crawler_logs.id
+
+  tags = local.tags
+}
+
+# Container Apps Job — runs the crawler on a daily cron schedule (04:00 UTC)
+resource "azurerm_container_app_job" "crawler_job" {
+  name                         = local.crawler_job_name
+  resource_group_name          = azurerm_resource_group.rg.name
+  location                     = azurerm_resource_group.rg.location
+  container_app_environment_id = azurerm_container_app_environment.cae.id
+
+  replica_timeout_in_seconds = 1800 # 30 min max — crawler typically finishes in ~10 min
+  replica_retry_limit        = 1
+
+  schedule_trigger_config {
+    cron_expression          = "0 4 * * *"
+    parallelism              = 1
+    replica_completion_count = 1
+  }
+
+  registry {
+    server               = azurerm_container_registry.acr.login_server
+    username             = azurerm_container_registry.acr.admin_username
+    password_secret_name = "acr-password"
+  }
+
+  secret {
+    name  = "acr-password"
+    value = azurerm_container_registry.acr.admin_password
+  }
+
+  template {
+    container {
+      name   = local.crawler_job_name
+      image  = "${azurerm_container_registry.acr.login_server}/events-crawler:${var.crawler_image_tag}"
+      cpu    = 1.0
+      memory = "2Gi"
+
+      env {
+        name  = "FUNCTIONS_WORKER_RUNTIME"
+        value = "dotnet-isolated"
+      }
+      env {
+        name  = "ASPNETCORE_ENVIRONMENT"
+        value = local.environment
+      }
+      env {
+        name  = "PLAYWRIGHT_BROWSERS_PATH"
+        value = "/home/site/wwwroot/.playwright"
+      }
+      env {
+        name  = "AzureWebJobsStorage"
+        value = azurerm_storage_account.events_storage.primary_connection_string
+      }
+      env {
+        name  = "ConnectionStrings__EventsConnection"
+        value = var.crawler_sql_connection_string
+      }
+      env {
+        name  = "Claude__ApiKey"
+        value = var.claude_api_key
+      }
+      env {
+        name  = "Groq__ApiKey"
+        value = var.groq_api_key
+      }
+    }
+  }
+
+  tags = local.tags
+}

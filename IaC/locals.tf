@@ -12,6 +12,11 @@ locals {
   # func_plane_name   = "gosofia-${local.env}-${local.region_code}-func-plan"
   # func_app_name     = "gosofia-${local.env}-${local.region_code}-func-app"
   # func_storage_name = "gosofiafuncstorage"
+  # Crawler container resources
+  acr_name          = "gosofiacrawleracr"
+  cae_name          = "gosofia-${local.env}-${local.region_code}-cae"
+  crawler_job_name  = "gosofia-crawler-job"
+  crawler_log_name  = "gosofia-${local.env}-${local.region_code}-cae-logs"
   tags = {
     project     = "GoSofia"
     environment = local.env
