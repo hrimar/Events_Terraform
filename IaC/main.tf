@@ -312,7 +312,7 @@ resource "azurerm_container_app_environment" "cae" {
   tags = local.tags
 }
 
-# Container Apps Job — runs the crawler on a daily cron schedule (04:00 UTC)
+# Container Apps Job — runs the crawler on a daily cron schedule (01:00 UTC)
 resource "azurerm_container_app_job" "crawler_job" {
   name                         = local.crawler_job_name
   resource_group_name          = azurerm_resource_group.rg.name
@@ -323,7 +323,7 @@ resource "azurerm_container_app_job" "crawler_job" {
   replica_retry_limit        = 1
 
   schedule_trigger_config {
-    cron_expression          = "0 4 * * *"
+    cron_expression          = "0 1 * * *"
     parallelism              = 1
     replica_completion_count = 1
   }
@@ -378,4 +378,14 @@ resource "azurerm_container_app_job" "crawler_job" {
   }
 
   tags = local.tags
+
+  # The image tag is owned by the crawler-deploy-production.yml GitHub Actions workflow, which
+  # runs "az containerapp job update --image ...:<commit-SHA>" directly against Azure on every
+  # push (bypassing Terraform state) for deterministic, traceable deploys. Without this, every
+  # terraform plan/apply would revert the image back to var.crawler_image_tag (default "latest"),
+  # fighting the CI/CD pipeline. Terraform still creates/manages the job with that default on
+  # first apply; after that, the image is CI/CD's responsibility.
+  lifecycle {
+    ignore_changes = [template[0].container[0].image]
+  }
 }
