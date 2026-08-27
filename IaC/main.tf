@@ -29,9 +29,11 @@ resource "azurerm_linux_web_app" "web_app" {
 
   https_only = true
   site_config {
-    always_on       = true
-    http2_enabled   = var.http2_enabled
-    ftps_state      = var.ftps_state
+    always_on                         = true
+    http2_enabled                     = var.http2_enabled
+    ftps_state                        = var.ftps_state
+    health_check_path                 = "/health"
+    health_check_eviction_time_in_min = 10
     application_stack {
       dotnet_version = var.dotnet_version
     }
@@ -44,17 +46,18 @@ resource "azurerm_linux_web_app" "web_app" {
   }
 
   app_settings = {
-    "BlobStorage__Uri"            = azurerm_storage_account.events_storage.primary_blob_endpoint
-    "Smtp__From"                  = var.smtp_from_address
-    "Smtp_DisplayName"            = var.display_name
-    "Smtp__Host"                  = var.smtp_host
-    "Smtp__Port"                  = var.smtp_port
-    "Smtp__UserName"              = var.smtp_username
-    "Smtp__Password"              = var.smtp_password
-    "Smtp__UseDefaultCredentials" = var.use_default_credentials
-    "Smtp__UseSsl"                = var.smtp_use_ssl
-    "Smtp__UseTls"                = var.smtp_use_tls
-    "ASPNETCORE_ENVIRONMENT"      = local.environment
+    "BlobStorage__Uri"                      = azurerm_storage_account.events_storage.primary_blob_endpoint
+    "Smtp__From"                            = var.smtp_from_address
+    "Smtp_DisplayName"                      = var.display_name
+    "Smtp__Host"                            = var.smtp_host
+    "Smtp__Port"                            = var.smtp_port
+    "Smtp__UserName"                        = var.smtp_username
+    "Smtp__Password"                        = var.smtp_password
+    "Smtp__UseDefaultCredentials"           = var.use_default_credentials
+    "Smtp__UseSsl"                          = var.smtp_use_ssl
+    "Smtp__UseTls"                          = var.smtp_use_tls
+    "ASPNETCORE_ENVIRONMENT"                = local.environment
+    "APPLICATIONINSIGHTS_CONNECTION_STRING" = azurerm_application_insights.web_insights.connection_string
   }
 
   tags = local.tags
@@ -136,10 +139,10 @@ resource "azurerm_storage_account" "events_storage" {
 }
 
 resource "azurerm_storage_container" "event_images" {
-  name                    = "event-images" // single container for original images and thumbnails in different virtual folders
-  storage_account_id      = azurerm_storage_account.events_storage.id
+  name                  = "event-images" // single container for original images and thumbnails in different virtual folders
+  storage_account_id    = azurerm_storage_account.events_storage.id
+  container_access_type = "blob" # public read for images
   # container_access_type = "private" # read and write access via Azure SDK/API withkey or SAS token
-  container_access_type   = "blob" # public read for images
 }
 
 # Assign Web App Managed Identity the "Storage Blob Data Contributor" role
@@ -388,4 +391,158 @@ resource "azurerm_container_app_job" "crawler_job" {
   lifecycle {
     ignore_changes = [template[0].container[0].image]
   }
+}
+
+# =============================================================================
+# Observability: Application Insights, HTTP logs, and Azure Monitor alerts for the Web App,
+# all feeding the same Log Analytics workspace already used for crawler logs.
+# =============================================================================
+
+# Application Insights for Events.Web - shares the existing Log Analytics
+# workspace (azurerm_log_analytics_workspace.crawler_logs) rather than creating
+# a second one, so all app + crawler telemetry lives in one place to query.
+resource "azurerm_application_insights" "web_insights" {
+  name                = "${local.app_name}-insights"
+  location            = azurerm_resource_group.rg.location
+  resource_group_name = azurerm_resource_group.rg.name
+  workspace_id        = azurerm_log_analytics_workspace.crawler_logs.id
+  application_type    = "web"
+
+  tags = local.tags
+}
+
+# Sends App Service HTTP/console/application logs to Log Analytics, queryable
+# via KQL (the same way crawler container logs already are).
+resource "azurerm_monitor_diagnostic_setting" "web_app_logs" {
+  name                       = "${local.app_name}-diagnostics"
+  target_resource_id         = azurerm_linux_web_app.web_app.id
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.crawler_logs.id
+
+  enabled_log {
+    category = "AppServiceHTTPLogs"
+  }
+
+  enabled_log {
+    category = "AppServiceConsoleLogs"
+  }
+
+  enabled_log {
+    category = "AppServiceAppLogs"
+  }
+
+  enabled_metric {
+    category = "AllMetrics"
+  }
+}
+
+# Email notification target for all alerts below.
+resource "azurerm_monitor_action_group" "ops_alerts" {
+  name                = "gosofia-${local.env}-${local.region_code}-alerts-ag"
+  resource_group_name = azurerm_resource_group.rg.name
+  short_name          = "gosofiaops"
+
+  email_receiver {
+    name          = "primary"
+    email_address = var.alert_email
+  }
+
+  tags = local.tags
+}
+
+# Thresholds are a starting point (no real traffic baseline existed before this
+# incident) - recalibrate once Application Insights has real data.
+resource "azurerm_monitor_metric_alert" "sql_dtu_high" {
+  name                = "gosofia-${local.env}-${local.region_code}-sql-dtu-high"
+  resource_group_name = azurerm_resource_group.rg.name
+  scopes              = [azurerm_mssql_database.db.id]
+  description         = "SQL Database DTU consumption above 80% for 5 minutes"
+  severity            = 2
+  frequency           = "PT5M"
+  window_size         = "PT5M"
+
+  criteria {
+    metric_namespace = "Microsoft.Sql/servers/databases"
+    metric_name      = "dtu_consumption_percent"
+    aggregation      = "Average"
+    operator         = "GreaterThan"
+    threshold        = 80
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.ops_alerts.id
+  }
+
+  tags = local.tags
+}
+
+resource "azurerm_monitor_metric_alert" "sql_workers_high" {
+  name                = "gosofia-${local.env}-${local.region_code}-sql-workers-high"
+  resource_group_name = azurerm_resource_group.rg.name
+  scopes              = [azurerm_mssql_database.db.id]
+  description         = "SQL Database worker consumption above 80% for 5 minutes - this is the exact metric that hit its limit during the 2026-08-25 incident."
+  severity            = 1
+  frequency           = "PT5M"
+  window_size         = "PT5M"
+
+  criteria {
+    metric_namespace = "Microsoft.Sql/servers/databases"
+    metric_name      = "workers_percent"
+    aggregation      = "Average"
+    operator         = "GreaterThan"
+    threshold        = 80
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.ops_alerts.id
+  }
+
+  tags = local.tags
+}
+
+resource "azurerm_monitor_metric_alert" "app_cpu_high" {
+  name                = "gosofia-${local.env}-${local.region_code}-app-cpu-high"
+  resource_group_name = azurerm_resource_group.rg.name
+  scopes              = [azurerm_service_plan.web_plan.id]
+  description         = "App Service Plan CPU above 80% for 5 minutes"
+  severity            = 2
+  frequency           = "PT5M"
+  window_size         = "PT5M"
+
+  criteria {
+    metric_namespace = "Microsoft.Web/serverfarms"
+    metric_name      = "CpuPercentage"
+    aggregation      = "Average"
+    operator         = "GreaterThan"
+    threshold        = 80
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.ops_alerts.id
+  }
+
+  tags = local.tags
+}
+
+resource "azurerm_monitor_metric_alert" "app_5xx_high" {
+  name                = "gosofia-${local.env}-${local.region_code}-app-5xx-high"
+  resource_group_name = azurerm_resource_group.rg.name
+  scopes              = [azurerm_linux_web_app.web_app.id]
+  description         = "App Service returning more than 5 server errors (5xx) within 5 minutes"
+  severity            = 1
+  frequency           = "PT5M"
+  window_size         = "PT5M"
+
+  criteria {
+    metric_namespace = "Microsoft.Web/sites"
+    metric_name      = "Http5xx"
+    aggregation      = "Total"
+    operator         = "GreaterThan"
+    threshold        = 5
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.ops_alerts.id
+  }
+
+  tags = local.tags
 }

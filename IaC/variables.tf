@@ -118,3 +118,8 @@ variable "crawler_image_tag" {
   description = "Docker image tag for the crawler job. Updated on each deployment."
   default     = "latest"
 }
+
+variable "alert_email" {
+  type        = string
+  description = "Email address that receives Azure Monitor alert notifications (SQL DTU/workers, App CPU, HTTP 5xx)."
+}
