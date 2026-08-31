@@ -63,6 +63,36 @@ resource "azurerm_linux_web_app" "web_app" {
   tags = local.tags
 }
 
+# Apex custom domain (go-sofia.com) - free Azure Managed Certificate + SNI binding.
+# Originally created manually in the Azure Portal (2026-08-28) to fix the apex domain not
+# resolving; adopted here via `terraform import` so it isn't orphaned/lost on a future apply.
+# www.go-sofia.com's binding/certificate predate this Terraform project and are still
+# unmanaged - left as-is, not part of this change.
+resource "azurerm_app_service_custom_hostname_binding" "apex" {
+  hostname            = "go-sofia.com"
+  app_service_name    = azurerm_linux_web_app.web_app.name
+  resource_group_name = azurerm_resource_group.rg.name
+
+  # SSL is attached separately via azurerm_app_service_certificate_binding below - changing
+  # this later would conflict with that resource.
+  lifecycle {
+    ignore_changes = [ssl_state, thumbprint]
+  }
+}
+
+resource "azurerm_app_service_managed_certificate" "apex" {
+  # No tags: Azure App Service Managed Certificates (the free, auto-renewing kind) don't
+  # persist tags - the API accepts a tags update and reports success, but never actually
+  # stores them, so declaring any here would show as permanent drift on every plan.
+  custom_hostname_binding_id = azurerm_app_service_custom_hostname_binding.apex.id
+}
+
+resource "azurerm_app_service_certificate_binding" "apex" {
+  hostname_binding_id = azurerm_app_service_custom_hostname_binding.apex.id
+  certificate_id      = azurerm_app_service_managed_certificate.apex.id
+  ssl_state           = "SniEnabled"
+}
+
 # SQL Server with AAD Admin
 resource "azurerm_mssql_server" "sql" {
   name                          = local.sql_name
